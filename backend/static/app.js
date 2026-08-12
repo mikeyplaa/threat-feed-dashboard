@@ -231,3 +231,99 @@ refreshBtn.addEventListener("click", async () => {
 
 loadFeeds();
 setInterval(loadFeeds, POLL_INTERVAL_MS);
+
+
+// ---------------------------------------------------------------------------
+// VirusTotal on-demand lookup
+// ---------------------------------------------------------------------------
+async function vtLookup() {
+  const q = document.getElementById("vt-input").value.trim();
+  if (!q) return;
+
+  const btn    = document.getElementById("vt-btn");
+  const result = document.getElementById("vt-result");
+
+  btn.disabled = true;
+  btn.textContent = "Looking up…";
+  result.innerHTML = `<div class="vt-loading">Querying VirusTotal…</div>`;
+  result.hidden = false;
+
+  try {
+    const res  = await fetch(`/api/vt/lookup?q=${encodeURIComponent(q)}`);
+    const data = await res.json();
+    renderVtResult(data);
+  } catch (e) {
+    result.innerHTML = `<div class="vt-error">Request failed: ${e.message}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Look up";
+  }
+}
+
+function renderVtResult(data) {
+  const result = document.getElementById("vt-result");
+
+  if (data.error) {
+    result.innerHTML = `<div class="vt-error">${data.error}</div>`;
+    result.hidden = false;
+    return;
+  }
+
+  const malicious  = data.malicious  || 0;
+  const suspicious = data.suspicious || 0;
+  const total      = data.total      || 0;
+
+  let verdictClass, verdictText;
+  if      (malicious >= 4)                    { verdictClass = "vt-malicious";  verdictText = "Malicious";  }
+  else if (malicious > 0 || suspicious > 0)   { verdictClass = "vt-suspicious"; verdictText = "Suspicious"; }
+  else                                        { verdictClass = "vt-clean";      verdictText = "Clean";      }
+
+  const TYPE_LABELS = { ip: "IP", domain: "Domain", hash: "File Hash", url: "URL" };
+
+  let extras = "";
+  if (data.type === "ip") {
+    const parts = [data.as_owner, data.country, data.network].filter(Boolean);
+    if (parts.length) extras = `<div class="vt-extra">${parts.join(" · ")}</div>`;
+  } else if (data.type === "domain") {
+    const parts = [...(data.categories || []), data.registrar].filter(Boolean);
+    if (parts.length) extras = `<div class="vt-extra">${parts.join(" · ")}</div>`;
+  } else if (data.type === "hash") {
+    const size  = data.size ? `${(data.size / 1024).toFixed(1)} KB` : null;
+    const parts = [data.name, data.file_type, size].filter(Boolean);
+    if (parts.length) extras = `<div class="vt-extra">${parts.join(" · ")}</div>`;
+  } else if (data.type === "url") {
+    const display = data.title || (data.final_url !== data.query ? data.final_url : null);
+    if (display) extras = `<div class="vt-extra">${display}</div>`;
+  }
+
+  const tags = (data.tags || []).length
+    ? `<div class="vt-tags">${data.tags.map(t => `<span class="badge">${t}</span>`).join(" ")}</div>`
+    : "";
+
+  result.innerHTML = `
+    <div class="vt-card">
+      <div class="vt-card-top">
+        <div class="vt-ioc-info">
+          <span class="vt-type-badge">${TYPE_LABELS[data.type] || data.type}</span>
+          <span class="vt-query">${data.query}</span>
+        </div>
+        <a class="vt-link" href="${data.vt_url}" target="_blank" rel="noopener">Full report →</a>
+      </div>
+      <div class="vt-verdict-row">
+        <span class="vt-score ${verdictClass}">${malicious}<span class="vt-total">/${total}</span></span>
+        <div class="vt-verdict-info">
+          <span class="vt-verdict-text ${verdictClass}">${verdictText}</span>
+          <span class="vt-verdict-detail">${malicious} malicious · ${suspicious} suspicious · ${data.undetected} undetected</span>
+        </div>
+      </div>
+      ${extras}
+      ${tags}
+    </div>
+  `;
+  result.hidden = false;
+}
+
+document.getElementById("vt-btn").addEventListener("click", vtLookup);
+document.getElementById("vt-input").addEventListener("keydown", e => {
+  if (e.key === "Enter") vtLookup();
+});
