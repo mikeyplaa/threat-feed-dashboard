@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Threat Feed Dashboard</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Threat Feed Dashboard</h1>
+    <div class="controls">
+      <span id="last-refresh">—</span>
+      <button id="refresh-btn">Refresh now</button>
+    </div>
+  </header>
+
+  <main id="board">
+    <!-- feed columns injected here -->
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
