@@ -1,0 +1,14 @@
+services:
+  dashboard:
+    build: ./backend
+    container_name: threat-feed-dashboard
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    environment:
+      - DB_PATH=/data/feeds.db
+      - ABUSECH_API_KEY=${ABUSECH_API_KEY:-}
+      - OTX_API_KEY=${OTX_API_KEY:-}
+      - CROWDSEC_API_KEY=${CROWDSEC_API_KEY:-}
+    volumes:
+      - ./data:/data
