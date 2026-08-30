@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 
 import httpx
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -21,12 +20,10 @@ logger = logging.getLogger("app")
 
 app = FastAPI(title="Threat Feed Dashboard")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# The frontend is served from this same app (StaticFiles mount below), so no
+# cross-origin requests are legitimate. Wildcard CORS would let any site the
+# user visits script calls against this unauthenticated API — see CLAUDE.md's
+# "localhost/home network only" trust model — so no CORS middleware is added.
 
 # In-memory cache: { feed_key: {"name": ..., "updated": ..., "items": [...], "error": ...} }
 CACHE: dict = {
