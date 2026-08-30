@@ -15,6 +15,27 @@ function fmtTime(iso) {
   try { return new Date(iso).toLocaleString(); } catch { return iso; }
 }
 
+// Feed items and VirusTotal fields originate from third-party sources
+// (community-submitted IOCs, scraped page titles, etc.) — never trust them
+// as HTML. Escape before interpolating into a template string.
+function escapeHtml(value) {
+  const div = document.createElement("div");
+  div.textContent = value == null ? "" : String(value);
+  return div.innerHTML;
+}
+
+// Only allow http(s) links to be used as hrefs — blocks javascript: and
+// other script-executing schemes smuggled in via a feed item's source_url.
+function safeUrl(url) {
+  if (!url) return null;
+  try {
+    const u = new URL(url, window.location.href);
+    return (u.protocol === "http:" || u.protocol === "https:") ? u.href : null;
+  } catch {
+    return null;
+  }
+}
+
 function severityClass(sev) {
   if (!sev) return "";
   const s = String(sev).toLowerCase();
@@ -48,17 +69,17 @@ function renderColumn(key, feed) {
   let infoconHtml = "";
   if (key === "sans_isc" && feed.items && feed.items.length > 0) {
     const level = feed.items[0].severity || "unknown";
-    infoconHtml = `<span class="infocon infocon-${level}">InfoCON: ${level}</span>`;
+    infoconHtml = `<span class="infocon infocon-${escapeHtml(level)}">InfoCON: ${escapeHtml(level)}</span>`;
   }
 
   const header = document.createElement("div");
   header.className = "column-header";
   header.innerHTML = `
     <div class="column-header-top">
-      <h2>${feed.name}</h2>
+      <h2>${escapeHtml(feed.name)}</h2>
       <div class="header-right">
         ${infoconHtml}
-        <span class="meta">${fmtTime(feed.updated)}</span>
+        <span class="meta">${escapeHtml(fmtTime(feed.updated))}</span>
       </div>
     </div>
     <div class="sparkline-wrap"><canvas id="sparkline-${key}"></canvas></div>
@@ -91,14 +112,15 @@ function renderColumn(key, feed) {
       const el = document.createElement("div");
       el.className = "item";
       const sevBadge = item.severity
-        ? `<span class="badge ${severityClass(item.severity)}">${item.severity}</span>`
+        ? `<span class="badge ${severityClass(item.severity)}">${escapeHtml(item.severity)}</span>`
         : "";
-      const titleInner = item.source_url
-        ? `<a href="${item.source_url}" target="_blank" rel="noopener">${item.title}</a>`
-        : item.title;
+      const safeSrc = safeUrl(item.source_url);
+      const titleInner = safeSrc
+        ? `<a href="${escapeHtml(safeSrc)}" target="_blank" rel="noopener">${escapeHtml(item.title)}</a>`
+        : escapeHtml(item.title);
       el.innerHTML = `
         <div class="item-title">${titleInner}${sevBadge}</div>
-        <div class="item-detail">${item.detail || ""}</div>
+        <div class="item-detail">${escapeHtml(item.detail || "")}</div>
       `;
       body.appendChild(el);
     }
@@ -264,7 +286,7 @@ function renderVtResult(data) {
   const result = document.getElementById("vt-result");
 
   if (data.error) {
-    result.innerHTML = `<div class="vt-error">${data.error}</div>`;
+    result.innerHTML = `<div class="vt-error">${escapeHtml(data.error)}</div>`;
     result.hidden = false;
     return;
   }
@@ -283,31 +305,33 @@ function renderVtResult(data) {
   let extras = "";
   if (data.type === "ip") {
     const parts = [data.as_owner, data.country, data.network].filter(Boolean);
-    if (parts.length) extras = `<div class="vt-extra">${parts.join(" · ")}</div>`;
+    if (parts.length) extras = `<div class="vt-extra">${parts.map(escapeHtml).join(" · ")}</div>`;
   } else if (data.type === "domain") {
     const parts = [...(data.categories || []), data.registrar].filter(Boolean);
-    if (parts.length) extras = `<div class="vt-extra">${parts.join(" · ")}</div>`;
+    if (parts.length) extras = `<div class="vt-extra">${parts.map(escapeHtml).join(" · ")}</div>`;
   } else if (data.type === "hash") {
     const size  = data.size ? `${(data.size / 1024).toFixed(1)} KB` : null;
     const parts = [data.name, data.file_type, size].filter(Boolean);
-    if (parts.length) extras = `<div class="vt-extra">${parts.join(" · ")}</div>`;
+    if (parts.length) extras = `<div class="vt-extra">${parts.map(escapeHtml).join(" · ")}</div>`;
   } else if (data.type === "url") {
     const display = data.title || (data.final_url !== data.query ? data.final_url : null);
-    if (display) extras = `<div class="vt-extra">${display}</div>`;
+    if (display) extras = `<div class="vt-extra">${escapeHtml(display)}</div>`;
   }
 
   const tags = (data.tags || []).length
-    ? `<div class="vt-tags">${data.tags.map(t => `<span class="badge">${t}</span>`).join(" ")}</div>`
+    ? `<div class="vt-tags">${data.tags.map(t => `<span class="badge">${escapeHtml(t)}</span>`).join(" ")}</div>`
     : "";
+
+  const safeVtUrl = safeUrl(data.vt_url);
 
   result.innerHTML = `
     <div class="vt-card">
       <div class="vt-card-top">
         <div class="vt-ioc-info">
-          <span class="vt-type-badge">${TYPE_LABELS[data.type] || data.type}</span>
-          <span class="vt-query">${data.query}</span>
+          <span class="vt-type-badge">${escapeHtml(TYPE_LABELS[data.type] || data.type)}</span>
+          <span class="vt-query">${escapeHtml(data.query)}</span>
         </div>
-        <a class="vt-link" href="${data.vt_url}" target="_blank" rel="noopener">Full report →</a>
+        ${safeVtUrl ? `<a class="vt-link" href="${escapeHtml(safeVtUrl)}" target="_blank" rel="noopener">Full report →</a>` : ""}
       </div>
       <div class="vt-verdict-row">
         <span class="vt-score ${verdictClass}">${malicious}<span class="vt-total">/${total}</span></span>
