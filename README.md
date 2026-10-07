@@ -23,6 +23,8 @@ production SOC tool, but written cleanly enough to grow into one.
   (green / yellow / orange / red)
 - **Auto-refresh** — UI polls `/api/feeds` every 60 seconds; background
   scheduler refreshes feeds every 15 minutes
+- **On-demand lookup widgets** — paste an IP/domain/hash/URL (VirusTotal) or
+  an email address (EmailRep) for an instant reputation check
 - **Zero frontend build step** — vanilla HTML/CSS/JS + Chart.js/Leaflet via CDN
 
 ---
@@ -57,6 +59,23 @@ data isn't available at all.
 
 ---
 
+## Lookup widgets
+
+Two on-demand lookup widgets sit above the feed columns — unlike the feeds
+above, these only query when you ask, never on a schedule.
+
+| Widget | Source | Auth required |
+|---|---|---|
+| VirusTotal | virustotal.com | `VT_API_KEY` |
+| EmailRep | emailrep.io | `EMAILREP_API_KEY` |
+
+Paste an IP, domain, hash, or URL into the VirusTotal box, or an email
+address into the EmailRep box, and hit "Look up" for an instant reputation
+verdict. Like the feeds, a missing key shows an inline error instead of
+breaking anything else.
+
+---
+
 ## Quick start
 
 **Requirements:** Docker and Docker Compose. No host Python needed.
@@ -88,8 +107,9 @@ docker compose down
 
 ## API keys
 
-Four feeds require free API keys. All four can be left blank — those columns
-will show an error card and the rest of the dashboard keeps working.
+Four feeds and both lookup widgets support free API keys. All can be left
+blank — the affected column or widget shows an error instead, and the rest
+of the dashboard keeps working.
 
 ### abuse.ch (covers both ThreatFox and URLhaus)
 
@@ -120,6 +140,21 @@ Unauthenticated search requests return 403 — a key is required.
 2. Account → API → copy your key
 3. `URLSCAN_API_KEY=<key>` in `.env`
 
+### VirusTotal
+
+1. Register at **https://www.virustotal.com/**
+2. API key → copy from your profile (free tier: 4 requests/min)
+3. `VT_API_KEY=<key>` in `.env`
+
+### EmailRep
+
+Unauthenticated requests are fully disabled (not just rate-limited) — a key
+is required even for the free tier.
+
+1. Register at **https://emailrep.io/**
+2. Copy your API key
+3. `EMAILREP_API_KEY=<key>` in `.env`
+
 ---
 
 ## Configuration
@@ -133,6 +168,8 @@ Compose reads this file automatically.
 | `OTX_API_KEY` | _(blank)_ | LevelBlue OTX auth |
 | `CROWDSEC_API_KEY` | _(blank)_ | CrowdSec CTI auth |
 | `URLSCAN_API_KEY` | _(blank)_ | urlscan.io auth |
+| `VT_API_KEY` | _(blank)_ | VirusTotal lookup widget auth |
+| `EMAILREP_API_KEY` | _(blank)_ | EmailRep lookup widget auth |
 | `DB_PATH` | `/data/feeds.db` | SQLite database path inside the container |
 
 The `data/` directory is bind-mounted (`./data:/data`) so the SQLite database
@@ -210,6 +247,13 @@ fetcher.
 ---
 
 ## Known constraints and gotchas
+
+**EmailRep requires a key, full stop** — confirmed Oct 2026: unauthenticated
+requests return 429 with `"the unauthenticated API is currently disabled.
+please use an API key"`, not just a lower rate limit. Auth is a `Key` header
+(not `Authorization` or `X-Api-Key`). There's also no public report page to
+link to — EmailRep is API-only, unlike VirusTotal's GUI — so the widget
+doesn't offer a "full report" link.
 
 **NVD rate limits** — NVD throttles unauthenticated requests hard (roughly
 5 per 30 minutes). If the NVD column shows 403 errors, either increase

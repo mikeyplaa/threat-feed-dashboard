@@ -351,3 +351,98 @@ document.getElementById("vt-btn").addEventListener("click", vtLookup);
 document.getElementById("vt-input").addEventListener("keydown", e => {
   if (e.key === "Enter") vtLookup();
 });
+
+
+// ---------------------------------------------------------------------------
+// EmailRep on-demand lookup
+// ---------------------------------------------------------------------------
+async function emailrepLookup() {
+  const q = document.getElementById("emailrep-input").value.trim();
+  if (!q) return;
+
+  const btn    = document.getElementById("emailrep-btn");
+  const result = document.getElementById("emailrep-result");
+
+  btn.disabled = true;
+  btn.textContent = "Looking up…";
+  result.innerHTML = `<div class="vt-loading">Querying EmailRep…</div>`;
+  result.hidden = false;
+
+  try {
+    const res  = await fetch(`/api/emailrep/lookup?q=${encodeURIComponent(q)}`);
+    const data = await res.json();
+    renderEmailrepResult(data);
+  } catch (e) {
+    result.innerHTML = `<div class="vt-error">Request failed: ${e.message}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Look up";
+  }
+}
+
+function renderEmailrepResult(data) {
+  const result = document.getElementById("emailrep-result");
+
+  if (data.error) {
+    result.innerHTML = `<div class="vt-error">${escapeHtml(data.error)}</div>`;
+    result.hidden = false;
+    return;
+  }
+
+  let verdictClass, verdictText;
+  if (data.suspicious || data.malicious_activity || data.blacklisted) {
+    verdictClass = "vt-malicious"; verdictText = "Malicious";
+  } else if (data.spam || data.data_breach || data.credentials_leaked || data.disposable || data.reputation === "low" || data.reputation === "medium") {
+    verdictClass = "vt-suspicious"; verdictText = "Suspicious";
+  } else {
+    verdictClass = "vt-clean"; verdictText = "Clean";
+  }
+
+  const FLAG_LABELS = {
+    blacklisted: "Blacklisted",
+    malicious_activity: "Malicious activity",
+    credentials_leaked: "Credentials leaked",
+    data_breach: "Data breach",
+    spam: "Spam",
+    disposable: "Disposable",
+    free_provider: "Free provider",
+    spoofable: "Spoofable",
+    new_domain: "New domain",
+  };
+  const flags = Object.entries(FLAG_LABELS)
+    .filter(([key]) => data[key])
+    .map(([, label]) => `<span class="badge">${escapeHtml(label)}</span>`);
+  const flagsHtml = flags.length ? `<div class="vt-tags">${flags.join(" ")}</div>` : "";
+
+  const extraParts = [data.domain_reputation ? `Domain reputation: ${data.domain_reputation}` : null]
+    .filter(Boolean);
+  const extras = extraParts.length
+    ? `<div class="vt-extra">${extraParts.map(escapeHtml).join(" · ")}</div>`
+    : "";
+
+  result.innerHTML = `
+    <div class="vt-card">
+      <div class="vt-card-top">
+        <div class="vt-ioc-info">
+          <span class="vt-type-badge">Email</span>
+          <span class="vt-query">${escapeHtml(data.query)}</span>
+        </div>
+      </div>
+      <div class="vt-verdict-row">
+        <span class="vt-score ${verdictClass}">${escapeHtml((data.reputation || "unknown").toUpperCase())}</span>
+        <div class="vt-verdict-info">
+          <span class="vt-verdict-text ${verdictClass}">${verdictText}</span>
+          <span class="vt-verdict-detail">${data.references ?? 0} references · ${data.suspicious ? "flagged suspicious" : "not flagged suspicious"}</span>
+        </div>
+      </div>
+      ${extras}
+      ${flagsHtml}
+    </div>
+  `;
+  result.hidden = false;
+}
+
+document.getElementById("emailrep-btn").addEventListener("click", emailrepLookup);
+document.getElementById("emailrep-input").addEventListener("keydown", e => {
+  if (e.key === "Enter") emailrepLookup();
+});

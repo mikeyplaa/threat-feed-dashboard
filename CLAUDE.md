@@ -56,6 +56,15 @@ routes, and `app.js` renders a column per key it receives from
 frontend; keep that logic inside each `fetch_*` function so the registry
 pattern stays true.
 
+**Different pattern — on-demand lookup widgets**: VirusTotal (`/api/vt/lookup`)
+and EmailRep (`/api/emailrep/lookup`) don't fit the scheduled-feed registry —
+they query only when the user submits something, not on a timer, and return
+a single result object rather than a list. These are one-off `@app.get`
+routes in `app.py`, each with its own small frontend widget
+(`#vt-widget`/`#emailrep-widget` in `index.html`, paired lookup/render
+functions in `app.js`). Don't force a new on-demand lookup into the `FEEDS`
+registry; follow the VT/EmailRep route+widget pattern instead.
+
 **Cache shape** (`CACHE` dict in `app.py`, keyed by feed key):
 ```python
 {"name": str, "updated": iso8601|None, "items": [...], "error": str|None}
@@ -88,6 +97,12 @@ hit live APIs in tests).
 
 ## Known constraints / gotchas
 
+- **EmailRep requires a key, full stop** (confirmed Oct 2026 — unauthenticated
+  requests return 429 `"the unauthenticated API is currently disabled.
+  please use an API key"`, not a lower rate limit). Auth is a `Key` header,
+  not `Authorization`/`X-Api-Key`. No public report page exists to link to
+  (API-only product), so `emailrep_lookup` doesn't return a GUI URL the way
+  `vt_lookup` does.
 - **NVD rate limits unauthenticated requests hard** (5 req/30 min window
   roughly). If NVD starts 403ing, either back off `REFRESH_INTERVAL_MINUTES`
   in `app.py` or add an NVD API key (free) as a request header in
