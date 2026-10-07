@@ -12,5 +12,6 @@ services:
       - CROWDSEC_API_KEY=${CROWDSEC_API_KEY:-}
       - URLSCAN_API_KEY=${URLSCAN_API_KEY:-}
       - VT_API_KEY=${VT_API_KEY:-}
+      - EMAILREP_API_KEY=${EMAILREP_API_KEY:-}
     volumes:
       - ./data:/data

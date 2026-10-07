@@ -186,5 +186,55 @@ async def vt_lookup(q: str):
     return result
 
 
+# ---------------------------------------------------------------------------
+# EmailRep on-demand lookup
+# EmailRep's unauthenticated API is fully disabled, not just rate-limited
+# (confirmed Oct 2026 — 429 "the unauthenticated API is currently disabled.
+# please use an API key") — EMAILREP_API_KEY is required, sent via a `Key`
+# header (not Authorization/X-Api-Key). There's no public report page to
+# link out to (unlike VirusTotal's GUI) since EmailRep is API-only.
+# ---------------------------------------------------------------------------
+@app.get("/api/emailrep/lookup")
+async def emailrep_lookup(q: str):
+    api_key = os.environ.get("EMAILREP_API_KEY")
+    if not api_key:
+        return {"error": "EMAILREP_API_KEY not set — free key at https://emailrep.io/"}
+    q = q.strip()
+    if not q or "@" not in q:
+        return {"error": "Enter a valid email address"}
+
+    async with httpx.AsyncClient() as client:
+        try:
+            r = await client.get(f"https://emailrep.io/{q}", headers={"Key": api_key}, timeout=15.0)
+            raw = r.json()
+        except Exception as e:
+            return {"error": str(e), "query": q}
+
+    if raw.get("status") == "fail":
+        return {"error": raw.get("reason", "Lookup failed"), "query": q}
+
+    details = raw.get("details", {})
+    return {
+        "query": q,
+        "reputation": raw.get("reputation"),
+        "suspicious": raw.get("suspicious"),
+        "references": raw.get("references"),
+        "blacklisted": details.get("blacklisted"),
+        "malicious_activity": details.get("malicious_activity"),
+        "credentials_leaked": details.get("credentials_leaked"),
+        "data_breach": details.get("data_breach"),
+        "domain_reputation": details.get("domain_reputation"),
+        "new_domain": details.get("new_domain"),
+        "free_provider": details.get("free_provider"),
+        "disposable": details.get("disposable"),
+        "deliverable": details.get("deliverable"),
+        "spam": details.get("spam"),
+        "spoofable": details.get("spoofable"),
+        "first_seen": details.get("first_seen"),
+        "last_seen": details.get("last_seen"),
+        "profiles": details.get("profiles", []),
+    }
+
+
 # Serve the frontend
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
