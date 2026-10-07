@@ -1,17 +1,20 @@
 # Threat Feed Dashboard
 
 A self-hosted, single-container personal threat intelligence dashboard. Pulls
-live data from 11 public and semi-public threat intel feeds on a 15-minute
-schedule and displays them in a browser with charts and live sparklines. Built
-for ongoing personal threat awareness — not a production SOC tool, but written
-cleanly enough to grow into one.
+live data from 12 public and semi-public threat intel feeds on a 15-minute
+schedule and displays them in a browser with charts, live sparklines, and an
+attack sources map. Built for ongoing personal threat awareness — not a
+production SOC tool, but written cleanly enough to grow into one.
 
 ---
 
 ## Features
 
-- **11 live threat intel feeds** — vulnerabilities, malware IOCs, phishing
+- **12 live threat intel feeds** — vulnerabilities, malware IOCs, phishing
   URLs, malicious URL scans, SSH attackers, IP reputation, security news
+- **Attack sources map** — a second page plotting today's top DShield attack
+  *source* IPs on a world map (not victim locations — see note below;
+  Leaflet + OpenStreetMap, no API key)
 - **SQLite persistence** — feed data survives container restarts; history is
   used to drive trend sparklines
 - **Charts** — NVD severity donut (CRITICAL/HIGH/MEDIUM/LOW breakdown) and
@@ -20,7 +23,7 @@ cleanly enough to grow into one.
   (green / yellow / orange / red)
 - **Auto-refresh** — UI polls `/api/feeds` every 60 seconds; background
   scheduler refreshes feeds every 15 minutes
-- **Zero frontend build step** — vanilla HTML/CSS/JS + Chart.js via CDN
+- **Zero frontend build step** — vanilla HTML/CSS/JS + Chart.js/Leaflet via CDN
 
 ---
 
@@ -39,9 +42,18 @@ cleanly enough to grow into one.
 | LevelBlue OTX — Threat Pulses | otx.alienvault.com | `OTX_API_KEY` |
 | CrowdSec — SSH Attacker Reputation | cti.api.crowdsec.net | `CROWDSEC_API_KEY` |
 | urlscan.io — Malicious URL Scans | urlscan.io | `URLSCAN_API_KEY` |
+| DShield — Top Attack Sources (Today) | isc.sans.edu + ipwho.is (geolocation) | None |
 
 Feeds that need API keys display an error card in the dashboard if the key is
 not set — they fail independently and never take down the others.
+
+The DShield feed also powers a second page, **Attack Sources Today**
+(`map.html`, linked from the dashboard header), which plots each source IP as
+a pin on a world map using the same `/api/feeds/dshield_map` data. Pins mark
+where the *attacking* IP is geolocated — DShield doesn't expose victim
+locations, only an anonymous count of how many distinct victims each source
+hit (used to size the pin). See "Known constraints" below for why victim
+data isn't available at all.
 
 ---
 
@@ -219,10 +231,27 @@ card rather than rendering an empty column.
 to GET in mid-2026. Both require an `Auth-Key` request header. A 401 means
 the key is missing or wrong.
 
+**DShield's per-IP lookup is community-rate-limited** — `/api/topips` (the
+top-attackers list) is fine to poll freely, but `/api/ip/{ip}` (per-IP detail)
+tripped a shared "Too Many Requests... bots cranky" 300-second cooldown after
+just one extra call in testing (Oct 2026) — it reads as a site-wide limit, not
+per-caller. `fetch_dshield_map` avoids it entirely and geolocates IPs via
+`ipwho.is` instead (free, HTTPS, no key), caching by IP so repeat offenders
+(which dominate the top-IPs list day to day) don't need re-resolving.
+
+**The attack map shows sources only, never victims** — DShield's `targets`
+field is just a count of how many distinct victims a source hit, not their
+identities or locations. Those "victims" are DShield's own volunteer sensor
+operators, and DShield deliberately doesn't publish which ones got hit (that
+would deanonymize their contributor base). There's no victim-location data
+to add here even in principle — a true source→destination map would need
+your own sensor/honeypot feeding both ends, not a public aggregate API.
+
 **Static files are baked into the image** — `docker compose restart` does NOT
 pick up frontend changes. Always use `docker compose up --build -d` after
-editing `index.html`, `style.css`, or `app.js`. Hard-refresh the browser
-(Ctrl+Shift+R) after rebuilding to bust the local cache.
+editing any file under `backend/static/` (`index.html`, `app.js`, `map.html`,
+`map.js`, etc). Hard-refresh the browser (Ctrl+Shift+R) after rebuilding to
+bust the local cache.
 
 **No auth on the dashboard** — designed for localhost / home network only. If
 you expose it further, put it behind a reverse proxy with authentication

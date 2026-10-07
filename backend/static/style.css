@@ -59,6 +59,16 @@ header h1 {
 
 #refresh-btn:disabled { opacity: 0.5; cursor: default; }
 
+.nav-link {
+  color: var(--text-dim);
+  text-decoration: none;
+}
+
+.nav-link:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
 main#board {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
