@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Attack Sources Map — Threat Feed Dashboard</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="map.css">
+</head>
+<body>
+  <header>
+    <h1>Attack Sources Today</h1>
+    <div class="controls">
+      <a class="nav-link" href="index.html">← Dashboard</a>
+      <span id="last-refresh">—</span>
+    </div>
+  </header>
+
+  <main id="map-container">
+    <div id="map"></div>
+    <div id="map-legend">
+      <div class="legend-note">Each pin is an attack <strong>source</strong> IP's location — not a victim.</div>
+      <div class="legend-title">Pin size = victims hit today</div>
+      <div class="legend-row">
+        <span class="legend-dot" style="width:12px;height:12px;background:#ffb454"></span>
+        <span class="legend-dot" style="width:20px;height:20px;background:#ff7a47"></span>
+        <span class="legend-dot" style="width:28px;height:28px;background:#ff3b3b"></span>
+      </div>
+      <div class="legend-caption">Color = report volume (amber → red)</div>
+    </div>
+  </main>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="map.js"></script>
+</body>
+</html>

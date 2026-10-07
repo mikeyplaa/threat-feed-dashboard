@@ -36,7 +36,10 @@ threat-feed-dashboard/
     └── static/
         ├── index.html
         ├── style.css
-        └── app.js        # fetches /api/feeds, renders one column per feed
+        ├── app.js        # fetches /api/feeds, renders one column per feed
+        ├── map.html      # second page — attack SOURCES map (Leaflet via CDN)
+        ├── map.css
+        └── map.js        # fetches /api/feeds/dshield_map, plots lat/lon pins
 ```
 
 **Key pattern — adding a feed**: every feed source is one `async def
@@ -108,6 +111,15 @@ hit live APIs in tests).
   hit the API immediately regardless of cooldown. A 429 still raises so
   quota exhaustion (e.g. from manual testing against the same key) surfaces
   as an error card instead of silently rendering empty.
+- **DShield's per-IP lookup (`/api/ip/{ip}`) is too fragile to fan out** —
+  confirmed Oct 2026: one extra call right after a `/api/topips` request
+  tripped a shared "Too Many Requests... bots cranky" 300s cooldown, which
+  looks like a community-wide limit rather than per-caller. `fetch_dshield_map`
+  only uses DShield for the top-IPs list itself (no auth, fine in bulk) and
+  geolocates via `ipwho.is` instead (free, HTTPS, no key). A module-level
+  `_geo_cache` in `feeds.py` keyed by IP keeps lookups low since the same
+  handful of scanners dominate the top-IPs list day to day — don't add
+  per-IP calls back to DShield's own API without re-confirming it can take it.
 - No auth on the dashboard itself — it's designed to sit on localhost/home
   network only. Anything exposing it further needs a reverse proxy with
   auth in front (Caddy/nginx/Tailscale), not auth built into the app.

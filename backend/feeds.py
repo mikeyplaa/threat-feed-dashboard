@@ -434,18 +434,89 @@ async def fetch_urlscan(client: httpx.AsyncClient, limit: int = 25):
 
 
 # ---------------------------------------------------------------------------
+# DShield (SANS ISC) — today's top attack source IPs, geolocated for the map
+# No auth required for /api/topips. ISC's own per-IP lookup (/api/ip/{ip}) is
+# too fragile for bulk enrichment — confirmed Oct 2026: a single extra call
+# right after a topips request tripped a shared "Too Many Requests... bots
+# cranky" 300s cooldown, suggesting the per-IP endpoint is community-rate-
+# limited and not meant for fanning out. Geolocation instead uses ipwho.is
+# (free, HTTPS, no key, no documented hard limit). A module-level IP->geo
+# cache keeps the volume low regardless: DShield's top-IPs list is dominated
+# by the same handful of scanners day to day, so after the first couple of
+# refreshes almost nothing new needs to be resolved.
+# ---------------------------------------------------------------------------
+_geo_cache: dict = {}  # ip -> geo dict, or None if lookup failed
+
+
+async def _geolocate(client: httpx.AsyncClient, ip: str) -> dict | None:
+    if ip in _geo_cache:
+        return _geo_cache[ip]
+    geo = None
+    try:
+        r = await client.get(f"https://ipwho.is/{ip}", timeout=TIMEOUT)
+        data = r.json()
+        if data.get("success"):
+            geo = {
+                "country": data.get("country"),
+                "country_code": data.get("country_code"),
+                "lat": data.get("latitude"),
+                "lon": data.get("longitude"),
+            }
+    except Exception:
+        pass
+    _geo_cache[ip] = geo
+    return geo
+
+
+async def fetch_dshield_map(client: httpx.AsyncClient, limit: int = 20):
+    r = await client.get(f"https://isc.sans.edu/api/topips/records/{limit}?json", headers=HEADERS, timeout=TIMEOUT)
+    r.raise_for_status()
+    rows = r.json()
+    if not isinstance(rows, list):
+        rows = []
+
+    geos = await asyncio.gather(*(_geolocate(client, row.get("source", "")) for row in rows))
+
+    out = []
+    for row, geo in zip(rows, geos):
+        ip = row.get("source", "")
+        geo = geo or {}
+        reports = row.get("reports") or 0
+        targets = row.get("targets") or 0
+        detail_parts = [f"{reports} reports / {targets} targets today"]
+        if geo.get("country"):
+            detail_parts.append(geo["country"])
+        out.append({
+            "id": ip,
+            "title": ip,
+            "detail": " | ".join(detail_parts),
+            "severity": None,
+            "source_url": f"https://isc.sans.edu/ipinfo.html?ip={ip}",
+            "timestamp": None,
+            "lat": geo.get("lat"),
+            "lon": geo.get("lon"),
+            "country": geo.get("country"),
+            "country_code": geo.get("country_code"),
+            "reports": reports,
+            "targets": targets,
+        })
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Registry: key -> (display name, fetch function)
 # ---------------------------------------------------------------------------
 FEEDS = {
-    "hackernews": ("Hacker News — Security Stories",       fetch_hackernews),
-    "cisa_kev":   ("CISA Known Exploited Vulnerabilities", fetch_cisa_kev),
-    "nvd_recent": ("NVD — Recently Published CVEs",        fetch_nvd_recent),
-    "sans_isc":   ("SANS ISC — Threat Diaries",            fetch_sans_isc),
-    "openphish":  ("OpenPhish — Active Phishing URLs",     fetch_openphish),
-    "blocklist":  ("Blocklist.de — SSH Attackers",         fetch_blocklist_de),
-    "threatfox":  ("ThreatFox — Recent Malware IOCs",      fetch_threatfox_recent),
-    "urlhaus":    ("URLhaus — Recent Malicious URLs",       fetch_urlhaus_recent),
-    "otx":        ("LevelBlue OTX — Threat Pulses",        fetch_otx),
-    "crowdsec":   ("CrowdSec — SSH Attacker Reputation",    fetch_crowdsec),
-    "urlscan":    ("urlscan.io — Malicious URL Scans",      fetch_urlscan),
+    "hackernews":  ("Hacker News — Security Stories",       fetch_hackernews),
+    "cisa_kev":    ("CISA Known Exploited Vulnerabilities", fetch_cisa_kev),
+    "nvd_recent":  ("NVD — Recently Published CVEs",        fetch_nvd_recent),
+    "sans_isc":    ("SANS ISC — Threat Diaries",            fetch_sans_isc),
+    "openphish":   ("OpenPhish — Active Phishing URLs",     fetch_openphish),
+    "blocklist":   ("Blocklist.de — SSH Attackers",         fetch_blocklist_de),
+    "threatfox":   ("ThreatFox — Recent Malware IOCs",      fetch_threatfox_recent),
+    "urlhaus":     ("URLhaus — Recent Malicious URLs",       fetch_urlhaus_recent),
+    "otx":         ("LevelBlue OTX — Threat Pulses",        fetch_otx),
+    "crowdsec":    ("CrowdSec — SSH Attacker Reputation",    fetch_crowdsec),
+    "urlscan":     ("urlscan.io — Malicious URL Scans",      fetch_urlscan),
+    "dshield_map": ("DShield — Top Attack Sources (Live Map)", fetch_dshield_map),
 }
