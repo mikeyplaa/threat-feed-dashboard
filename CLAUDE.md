@@ -92,6 +92,22 @@ hit live APIs in tests).
 - **abuse.ch API methods**: ThreatFox is POST-based (intentional). URLhaus
   switched from POST to GET (confirmed Aug 2026 — `"http_get_expected"` error).
   Don't revert URLhaus back to POST.
+- **urlscan.io search requires an API key** (unauthenticated search returns
+  403) and the free plan can't query the `verdicts.overall.malicious` field
+  (confirmed Oct 2026 — `"Your current plan does not allow you to search
+  field..."`; the `verdicts` object isn't even in the response). `fetch_urlscan`
+  queries `task.tags:malicious` instead, which is free-tier accessible.
+- **CrowdSec CTI free tier is a flat 50 queries/day** (per CrowdSec's own CTI
+  product page). That's far below what the 15-minute dashboard refresh would
+  burn through even at a handful of IPs per call, so `fetch_crowdsec`
+  self-throttles independently of the scheduler: a module-level cache
+  (`_crowdsec_cache` / `_CROWDSEC_COOLDOWN_MINUTES` in `feeds.py`) only hits
+  the real API once per 3 hours and returns the last cached batch the rest of
+  the time, at `limit=5` IPs — roughly 40 requests/day. That cache lives in
+  process memory, so a container restart resets it and the next refresh will
+  hit the API immediately regardless of cooldown. A 429 still raises so
+  quota exhaustion (e.g. from manual testing against the same key) surfaces
+  as an error card instead of silently rendering empty.
 - No auth on the dashboard itself — it's designed to sit on localhost/home
   network only. Anything exposing it further needs a reverse proxy with
   auth in front (Caddy/nginx/Tailscale), not auth built into the app.

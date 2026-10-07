@@ -10,6 +10,7 @@ services:
       - ABUSECH_API_KEY=${ABUSECH_API_KEY:-}
       - OTX_API_KEY=${OTX_API_KEY:-}
       - CROWDSEC_API_KEY=${CROWDSEC_API_KEY:-}
+      - URLSCAN_API_KEY=${URLSCAN_API_KEY:-}
       - VT_API_KEY=${VT_API_KEY:-}
     volumes:
       - ./data:/data
