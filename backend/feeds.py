@@ -458,6 +458,77 @@ async def fetch_crowdsec(client: httpx.AsyncClient, limit: int = 5):
 
 
 # ---------------------------------------------------------------------------
+# UK NCSC — news + threat reports via RSS (no auth)
+# Two official feeds merged into one column, newest first. The threat-report
+# feed has been reported by RSS aggregators as having gone quiet, so each feed
+# is fetched independently: one failing is logged and skipped, and the column
+# only errors if BOTH fail. Items carry no severity, so the risk score is
+# keyword-based: titles that read like an active threat get boosted.
+# ---------------------------------------------------------------------------
+# Order matters: an item in both feeds keeps the label of the first one.
+NCSC_FEEDS = {
+    "threat report": "https://www.ncsc.gov.uk/api/1/services/v1/report-rss-feed.xml",
+    "news": "https://www.ncsc.gov.uk/api/1/services/v1/news-rss-feed.xml",
+}
+_NCSC_URGENT = re.compile(
+    r"\b(vulnerab\w*|exploit\w*|ransomware|alert|advisory|zero[- ]day|"
+    r"critical|patch\w*|compromise\w*|breach\w*|malware|attack\w*)\b",
+    re.I,
+)
+
+
+def _ncsc_risk(kind: str, title: str) -> dict:
+    hits = list(dict.fromkeys(m.lower() for m in _NCSC_URGENT.findall(title or "")))
+    if hits:
+        return _risk(70, "advisory", f"UK NCSC {kind} mentioning {', '.join(hits)}")
+    return _risk(40, "advisory", f"UK NCSC {kind}")
+
+
+async def fetch_ncsc(client: httpx.AsyncClient, limit: int = 25):
+    async def _one(kind: str, url: str):
+        r = await client.get(url, headers=HEADERS, timeout=TIMEOUT, follow_redirects=True)
+        r.raise_for_status()
+        return kind, ET.fromstring(r.content)
+
+    results = await asyncio.gather(*(_one(k, u) for k, u in NCSC_FEEDS.items()), return_exceptions=True)
+    errors = [f"{kind}: {res}" for kind, res in zip(NCSC_FEEDS, results) if isinstance(res, Exception)]
+    if len(errors) == len(NCSC_FEEDS):
+        raise RuntimeError("all NCSC feeds failed — " + "; ".join(errors))
+    for e in errors:
+        logger.warning(f"NCSC partial failure, continuing with other feed: {e}")
+
+    seen, out = set(), []
+    for res in results:
+        if isinstance(res, Exception):
+            continue
+        kind, root = res
+        for item in root.findall(".//item"):
+            link = (item.findtext("link") or "").strip()
+            title = (item.findtext("title") or "").strip()
+            key = link or title
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            pub_date = item.findtext("pubDate")
+            try:
+                ts = parsedate_to_datetime(pub_date).astimezone(timezone.utc).isoformat() if pub_date else None
+            except Exception:
+                ts = None
+            description = re.sub(r"<[^>]+>", "", item.findtext("description") or "").strip()
+            out.append({
+                "id": key,
+                "title": title,
+                "detail": description[:300] or f"NCSC {kind}",
+                "severity": kind,
+                "source_url": link or None,
+                "timestamp": ts,
+                "risk": _ncsc_risk(kind, title),
+            })
+    out.sort(key=lambda i: i["timestamp"] or "", reverse=True)
+    return out[:limit]
+
+
+# ---------------------------------------------------------------------------
 # Hacker News — recent security stories via Algolia search API (no auth)
 # ---------------------------------------------------------------------------
 async def fetch_hackernews(client: httpx.AsyncClient, limit: int = 20):
@@ -618,6 +689,7 @@ FEEDS = {
     "cisa_kev":    ("CISA Known Exploited Vulnerabilities", fetch_cisa_kev),
     "nvd_recent":  ("NVD — Critical CVEs (Last 7 Days)",     fetch_nvd_recent),
     "sans_isc":    ("SANS ISC — Threat Diaries",            fetch_sans_isc),
+    "ncsc":        ("UK NCSC — News & Threat Reports",      fetch_ncsc),
     "openphish":   ("OpenPhish — Active Phishing URLs",     fetch_openphish),
     "blocklist":   ("Blocklist.de — SSH Attackers",         fetch_blocklist_de),
     "threatfox":   ("ThreatFox — Recent Malware IOCs",      fetch_threatfox_recent),
