@@ -9,7 +9,14 @@ Each fetch_* function returns a list of normalised dicts:
         "severity": str | None,
         "source_url": str | None,
         "timestamp": str (ISO8601) | None,
+        "risk": {"score": int 0-100, "category": str, "reason": str,
+                 "indicator": str (optional — CVE/IP/URL for cross-feed merging)},
     }
+
+`risk` feeds the Top Critical Threats page (critical.py / /api/critical).
+Every fetcher scores its own items with _risk() so feed-specific judgement
+stays inside the fetcher, same as the rest of the registry pattern. Rough
+scale: 85+ critical, 70+ high, 50+ medium, below that low.
 
 Add a new feed by writing a fetch_* function and registering it in FEEDS
 at the bottom of this file.
@@ -38,6 +45,20 @@ def _now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
+def _risk(score: float, category: str, reason: str, indicator: str | None = None) -> dict:
+    """Normalised risk block attached to every item (see module docstring).
+
+    `indicator` is the real-world thing the item is about (CVE ID, IP, URL).
+    critical.py merges items from different feeds that share an indicator, so
+    only set it when it's a genuine cross-feed identifier — not a feed's own
+    internal row ID.
+    """
+    risk = {"score": max(0, min(100, int(round(score)))), "category": category, "reason": reason}
+    if indicator:
+        risk["indicator"] = str(indicator).strip().lower()
+    return risk
+
+
 # ---------------------------------------------------------------------------
 # CISA Known Exploited Vulnerabilities (KEV)
 # ---------------------------------------------------------------------------
@@ -50,6 +71,12 @@ async def fetch_cisa_kev(client: httpx.AsyncClient, limit: int = 25):
     vulns.sort(key=lambda v: v.get("dateAdded", ""), reverse=True)
     out = []
     for v in vulns[:limit]:
+        ransomware = (v.get("knownRansomwareCampaignUse") or "").lower() == "known"
+        reason = "Actively exploited in the wild (CISA KEV)"
+        if ransomware:
+            reason += "; used in ransomware campaigns"
+        if v.get("dueDate"):
+            reason += f"; federal remediation due {v.get('dueDate')}"
         out.append({
             "id": v.get("cveID"),
             "title": f"{v.get('cveID')} — {v.get('vulnerabilityName')}",
@@ -57,33 +84,64 @@ async def fetch_cisa_kev(client: httpx.AsyncClient, limit: int = 25):
             "severity": "known-exploited",
             "source_url": f"https://nvd.nist.gov/vuln/detail/{v.get('cveID')}",
             "timestamp": v.get("dateAdded"),
+            "risk": _risk(98 if ransomware else 95, "vulnerability", reason, v.get("cveID")),
         })
     return out
 
 
 # ---------------------------------------------------------------------------
-# NVD — recently published CVEs
+# NVD — CRITICAL CVEs published in the last NVD_WINDOW_DAYS days
+# NVD returns results oldest-first, so we pull the whole window in ONE request
+# (a week of CRITICAL CVEs is a few hundred at most, well under the 2000/page
+# cap) and sort newest-first locally — a second request to page from the end
+# would double our use of NVD's tight unauthenticated rate limit.
 # ---------------------------------------------------------------------------
-async def fetch_nvd_recent(client: httpx.AsyncClient, limit: int = 20):
+NVD_WINDOW_DAYS = 7
+
+
+async def fetch_nvd_recent(client: httpx.AsyncClient, limit: int = 25):
     url = "https://services.nvd.nist.gov/rest/json/cves/2.0"
-    params = {"resultsPerPage": limit, "startIndex": 0}
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(days=NVD_WINDOW_DAYS)
+    fmt = "%Y-%m-%dT%H:%M:%S.000"
+    params = {
+        "pubStartDate": start.strftime(fmt),
+        "pubEndDate": end.strftime(fmt),
+        "cvssV3Severity": "CRITICAL",
+        "resultsPerPage": 2000,
+        "startIndex": 0,
+    }
     r = await client.get(url, headers=HEADERS, params=params, timeout=TIMEOUT)
     r.raise_for_status()
     data = r.json()
+    vulns = data.get("vulnerabilities", [])
+    vulns.sort(key=lambda v: v.get("cve", {}).get("published", ""), reverse=True)
     out = []
-    for item in data.get("vulnerabilities", []):
+    for item in vulns[:limit]:
         cve = item.get("cve", {})
         cve_id = cve.get("id")
         descs = cve.get("descriptions", [])
         desc_en = next((d["value"] for d in descs if d.get("lang") == "en"), "")
         metrics = cve.get("metrics", {})
         severity = None
+        base_score = None
         for key in ("cvssMetricV31", "cvssMetricV30", "cvssMetricV2"):
             if key in metrics and metrics[key]:
-                severity = metrics[key][0]["cvssData"].get("baseSeverity") or str(
-                    metrics[key][0]["cvssData"].get("baseScore")
-                )
+                cvss = metrics[key][0]["cvssData"]
+                base_score = cvss.get("baseScore")
+                severity = cvss.get("baseSeverity") or str(base_score)
                 break
+        try:
+            cvss_num = float(base_score) if base_score is not None else 9.0
+        except (TypeError, ValueError):
+            cvss_num = 9.0
+        # CVSS 9.0 -> 80 ... 10.0 -> 90: critical, but below "actively exploited" (KEV)
+        nvd_risk = _risk(
+            80 + (cvss_num - 9.0) * 10,
+            "vulnerability",
+            f"CVSS {cvss_num:.1f} {severity or 'CRITICAL'} (NVD) — not yet known to be exploited",
+            cve_id,
+        )
         out.append({
             "id": cve_id,
             "title": cve_id,
@@ -91,6 +149,7 @@ async def fetch_nvd_recent(client: httpx.AsyncClient, limit: int = 20):
             "severity": severity,
             "source_url": f"https://nvd.nist.gov/vuln/detail/{cve_id}",
             "timestamp": cve.get("published"),
+            "risk": nvd_risk,
         })
     return out
 
@@ -114,7 +173,15 @@ async def fetch_threatfox_recent(client: httpx.AsyncClient, limit: int = 25):
         items = []
     items.sort(key=lambda i: i.get("first_seen", ""), reverse=True)
     out = []
+    _tf_base = {"botnet_cc": 85, "payload_delivery": 75, "payload": 70}
+    _tf_label = {"botnet_cc": "Botnet C2 server", "payload_delivery": "Malware delivery host", "payload": "Malware payload"}
     for i in items[:limit]:
+        threat_type = i.get("threat_type") or ""
+        try:
+            confidence = int(i.get("confidence_level") or 0)
+        except (TypeError, ValueError):
+            confidence = 0
+        malware = i.get("malware_printable") or "unknown malware"
         out.append({
             "id": str(i.get("id")),
             "title": f"{i.get('ioc_type', 'IOC').upper()}: {i.get('ioc')}",
@@ -122,6 +189,14 @@ async def fetch_threatfox_recent(client: httpx.AsyncClient, limit: int = 25):
             "severity": i.get("threat_type"),
             "source_url": i.get("reference"),
             "timestamp": i.get("first_seen"),
+            # lose up to 10 points for low reporter confidence
+            "risk": _risk(
+                _tf_base.get(threat_type, 60) - (100 - confidence) / 10,
+                "malware-ioc",
+                f"{_tf_label.get(threat_type, threat_type or 'IOC')} for {malware} ({confidence}% confidence, ThreatFox)",
+                # ip:port IOCs reduce to the bare IP so they match attacker-IP feeds
+                re.sub(r":\d+$", "", i.get("ioc") or "") if i.get("ioc_type") == "ip:port" else i.get("ioc"),
+            ),
         })
     return out
 
@@ -149,6 +224,13 @@ async def fetch_urlhaus_recent(client: httpx.AsyncClient, limit: int = 25):
             "severity": i.get("url_status"),
             "source_url": i.get("urlhaus_reference"),
             "timestamp": i.get("date_added"),
+            "risk": _risk(
+                75 if i.get("url_status") == "online" else 40,
+                "malicious-url",
+                ("Live" if i.get("url_status") == "online" else "Offline")
+                + f" malware distribution URL ({i.get('threat') or 'unknown threat'}, URLhaus)",
+                i.get("url"),
+            ),
         })
     return out
 
@@ -168,6 +250,12 @@ async def fetch_sans_isc(client: httpx.AsyncClient, limit: int = 20):
     infocon = infocon_match.group(1).lower() if infocon_match else None
     _severity_map = {"green": "low", "yellow": "medium", "orange": "high", "red": "critical"}
     infocon_severity = _severity_map.get(infocon, infocon)
+    _infocon_score = {"red": 90, "orange": 75, "yellow": 55, "green": 30}
+    sans_risk = _risk(
+        _infocon_score.get(infocon, 30),
+        "advisory",
+        f"SANS ISC diary at InfoCON {infocon or 'unknown'}",
+    )
     out = []
     for item in root.findall(".//item")[:limit]:
         title = item.findtext("title") or ""
@@ -189,6 +277,7 @@ async def fetch_sans_isc(client: httpx.AsyncClient, limit: int = 20):
             "severity": infocon_severity,
             "source_url": canonical_url,
             "timestamp": ts,
+            "risk": sans_risk,
         })
     return out
 
@@ -212,6 +301,7 @@ async def fetch_openphish(client: httpx.AsyncClient, limit: int = 30):
             "severity": "phishing",
             "source_url": None,
             "timestamp": None,
+            "risk": _risk(65, "phishing", "Currently active phishing URL (OpenPhish)", phish_url),
         })
     return out
 
@@ -238,6 +328,7 @@ async def fetch_blocklist_de(client: httpx.AsyncClient, limit: int = 30):
             "severity": "brute-force",
             "source_url": f"https://www.blocklist.de/en/search.html?ip={ip}",
             "timestamp": None,
+            "risk": _risk(45, "attacker-ip", "Reported for SSH brute-forcing in the last 48h (Blocklist.de)", ip),
         })
     return out
 
@@ -266,6 +357,7 @@ async def fetch_otx(client: httpx.AsyncClient, limit: int = 20):
             "severity": pulse.get("TLP"),
             "source_url": f"https://otx.alienvault.com/pulse/{pulse.get('id')}",
             "timestamp": pulse.get("created"),
+            "risk": _risk(55, "threat-intel", "Community threat intel pulse (LevelBlue OTX)"),
         })
     return out
 
@@ -343,6 +435,7 @@ async def fetch_crowdsec(client: httpx.AsyncClient, limit: int = 5):
         if noise and noise != "none":
             parts.append(f"· noise: {noise}")
 
+        _cs_score = {"malicious": 70, "suspicious": 55, "known": 35, "benign": 10}
         out.append({
             "id": ip,
             "title": ip,
@@ -350,6 +443,12 @@ async def fetch_crowdsec(client: httpx.AsyncClient, limit: int = 5):
             "severity": reputation,
             "source_url": f"https://app.crowdsec.net/cti/{ip}",
             "timestamp": None,
+            "risk": _risk(
+                _cs_score.get(reputation, 30),
+                "attacker-ip",
+                f"CrowdSec reputation: {reputation}" + (f" ({behaviors})" if behaviors else ""),
+                ip,
+            ),
         })
 
     out.sort(key=lambda x: _rep_order.get(x["severity"], 9))
@@ -385,6 +484,7 @@ async def fetch_hackernews(client: httpx.AsyncClient, limit: int = 20):
             "severity": None,
             "source_url": external_url or hn_url,
             "timestamp": h.get("created_at"),
+            "risk": _risk(20, "news", "Security news story (Hacker News)"),
         })
     return out
 
@@ -429,6 +529,12 @@ async def fetch_urlscan(client: httpx.AsyncClient, limit: int = 25):
             "severity": tags[0] if tags else "malicious",
             "source_url": f"https://urlscan.io/result/{uuid}/" if uuid else None,
             "timestamp": task.get("time"),
+            "risk": _risk(
+                65 if "phishing" in tags else 60,
+                "phishing" if "phishing" in tags else "malicious-url",
+                "Scan tagged " + (", ".join(tags) if tags else "malicious") + " (urlscan.io)",
+                page.get("url") or task.get("url"),
+            ),
         })
     return out
 
@@ -493,6 +599,7 @@ async def fetch_dshield_map(client: httpx.AsyncClient, limit: int = 20):
             "severity": None,
             "source_url": f"https://isc.sans.edu/ipinfo.html?ip={ip}",
             "timestamp": None,
+            "risk": _risk(50, "attacker-ip", f"Top attack source today: {reports} reports against {targets} targets (DShield)", ip),
             "lat": geo.get("lat"),
             "lon": geo.get("lon"),
             "country": geo.get("country"),
@@ -509,7 +616,7 @@ async def fetch_dshield_map(client: httpx.AsyncClient, limit: int = 20):
 FEEDS = {
     "hackernews":  ("Hacker News — Security Stories",       fetch_hackernews),
     "cisa_kev":    ("CISA Known Exploited Vulnerabilities", fetch_cisa_kev),
-    "nvd_recent":  ("NVD — Recently Published CVEs",        fetch_nvd_recent),
+    "nvd_recent":  ("NVD — Critical CVEs (Last 7 Days)",     fetch_nvd_recent),
     "sans_isc":    ("SANS ISC — Threat Diaries",            fetch_sans_isc),
     "openphish":   ("OpenPhish — Active Phishing URLs",     fetch_openphish),
     "blocklist":   ("Blocklist.de — SSH Attackers",         fetch_blocklist_de),

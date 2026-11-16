@@ -33,13 +33,17 @@ threat-feed-dashboard/
     ├── app.py            # FastAPI app: scheduler, cache, API routes, static mount
     ├── db.py             # SQLite helpers: init, save_snapshot, load_latest, get_daily_counts
     ├── feeds.py          # one fetch_* function per feed source + FEEDS registry
+    ├── critical.py       # cross-feed Top-N ranking behind /api/critical (pure, no I/O)
     └── static/
         ├── index.html
         ├── style.css
         ├── app.js        # fetches /api/feeds, renders one column per feed
         ├── map.html      # second page — attack SOURCES map (Leaflet via CDN)
         ├── map.css
-        └── map.js        # fetches /api/feeds/dshield_map, plots lat/lon pins
+        ├── map.js        # fetches /api/feeds/dshield_map, plots lat/lon pins
+        ├── critical.html # third page — Top 25 Critical Threats
+        ├── critical.css
+        └── critical.js   # fetches /api/critical: stat tiles, CSS bar charts, ranked list
 ```
 
 **Key pattern — adding a feed**: every feed source is one `async def
@@ -47,14 +51,26 @@ fetch_x(client: httpx.AsyncClient, limit=...)` function in `feeds.py` that
 returns a list of normalised dicts:
 ```python
 {"id": str, "title": str, "detail": str, "severity": str|None,
- "source_url": str|None, "timestamp": str|None}
+ "source_url": str|None, "timestamp": str|None,
+ "risk": _risk(score, category, reason, indicator=None)}
 ```
+`risk` is what the Top Critical Threats page ranks on — give every new
+fetcher one (0–100; 85+ critical, 70+ high, 50+ medium). Set `indicator`
+only to a real cross-feed identifier (CVE ID, IP, URL), never a feed's own
+row ID: `critical.py` merges items from different feeds that share one.
 Register it in the `FEEDS` dict at the bottom of `feeds.py`. Nothing else
 needs to change — `app.py` iterates `FEEDS` for the scheduler and API
 routes, and `app.js` renders a column per key it receives from
 `/api/feeds`. Don't special-case individual feeds in `app.py` or the
 frontend; keep that logic inside each `fetch_*` function so the registry
 pattern stays true.
+
+**Top Critical Threats (`/api/critical`, `critical.py`)**: ranks every
+cached item by its `risk.score`, then applies only feed-agnostic rules —
+freshness penalty (−2/day after 24h, max −30; no timestamp = no penalty),
+corroboration bonus (+5 per extra feed sharing an `indicator`, max +10), and
+a per-feed cap (`max_per_source`, default 10) so no one feed fills the list.
+Keep per-feed judgement in the `fetch_*` `risk` block, not in `critical.py`.
 
 **Different pattern — on-demand lookup widgets**: VirusTotal (`/api/vt/lookup`)
 and EmailRep (`/api/emailrep/lookup`) don't fit the scheduled-feed registry —
@@ -103,6 +119,10 @@ hit live APIs in tests).
   not `Authorization`/`X-Api-Key`. No public report page exists to link to
   (API-only product), so `emailrep_lookup` doesn't return a GUI URL the way
   `vt_lookup` does.
+- **NVD fetch is CRITICAL-only, last 7 days** (`NVD_WINDOW_DAYS`,
+  `cvssV3Severity=CRITICAL`). NVD returns oldest-first, so it pulls the whole
+  window in one request (`resultsPerPage=2000`) and sorts newest-first locally
+  rather than spending a second request on paging.
 - **NVD rate limits unauthenticated requests hard** (5 req/30 min window
   roughly). If NVD starts 403ing, either back off `REFRESH_INTERVAL_MINUTES`
   in `app.py` or add an NVD API key (free) as a request header in
