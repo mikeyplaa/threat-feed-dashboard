@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 import db
+from critical import build_critical
 from feeds import FEEDS
 
 logging.basicConfig(level=logging.INFO)
@@ -101,6 +102,14 @@ async def get_feed_history(key: str, days: int = 7):
     if key not in FEEDS:
         return {"error": "unknown feed"}
     return await db.get_daily_counts(key, days)
+
+
+@app.get("/api/critical")
+async def get_critical(limit: int = 25, max_per_source: int = 10):
+    """Top-N threats ranked across every feed — see critical.py for scoring."""
+    limit = max(1, min(limit, 100))
+    max_per_source = max(1, min(max_per_source, 100))
+    return build_critical(CACHE, limit=limit, max_per_source=max_per_source)
 
 
 # ---------------------------------------------------------------------------

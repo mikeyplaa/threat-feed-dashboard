@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Top Critical Threats — Threat Feed Dashboard</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="critical.css">
+</head>
+<body>
+  <header>
+    <h1>Top 25 Critical Threats</h1>
+    <div class="controls">
+      <a class="nav-link" href="index.html">← Dashboard</a>
+      <a class="nav-link" href="map.html">Attack Sources Today →</a>
+      <span id="last-refresh">—</span>
+    </div>
+  </header>
+
+  <main id="critical">
+    <section id="intro">
+      <p id="summary-line">Loading…</p>
+      <details id="how-scored">
+        <summary>How threats are scored</summary>
+        <div class="how-body">
+          <p>Each feed scores its own items from 0 to 100. The page then applies three rules that work the same way for every feed:</p>
+          <ul>
+            <li><strong>Freshness:</strong> after the first 24 hours, an item loses 2 points per day, up to a maximum of −30. Items from lists of currently active threats (OpenPhish, Blocklist.de, DShield, CrowdSec) have no timestamp and are not penalised.</li>
+            <li><strong>Corroboration:</strong> when the same CVE, IP or URL appears in more than one feed, the entries are merged and get +5 points per extra feed, up to +10.</li>
+            <li><strong>Diversity:</strong> no single feed can take more than 10 of the 25 places.</li>
+          </ul>
+          <table class="scale">
+            <tr><th>Base</th><th>Source / reason</th></tr>
+            <tr><td>95–98</td><td>CISA KEV: actively exploited (98 if used in ransomware campaigns)</td></tr>
+            <tr><td>80–90</td><td>NVD CRITICAL CVE, scaled by CVSS score from 9.0 to 10.0</td></tr>
+            <tr><td>30–90</td><td>SANS ISC diary, depending on InfoCON (green → red)</td></tr>
+            <tr><td>60–85</td><td>ThreatFox: botnet C2 85, delivery host 75, payload 70, minus up to 10 for low confidence</td></tr>
+            <tr><td>75 / 40</td><td>URLhaus: URL currently online / offline</td></tr>
+            <tr><td>70 / 55</td><td>CrowdSec: malicious / suspicious</td></tr>
+            <tr><td>60–65</td><td>OpenPhish and urlscan.io: phishing or malicious URLs</td></tr>
+            <tr><td>45–55</td><td>DShield top attackers, Blocklist.de brute-forcers, OTX pulses</td></tr>
+            <tr><td>20</td><td>Hacker News stories (context only, rarely make the list)</td></tr>
+          </table>
+          <p class="dim">Levels: 85+ critical · 70+ high · 50+ medium · below 50 low.</p>
+        </div>
+      </details>
+    </section>
+
+    <section id="feed-warnings" hidden></section>
+
+    <section id="tiles"></section>
+
+    <section id="charts">
+      <div class="panel">
+        <h2>By source</h2>
+        <div id="chart-source" class="bars"></div>
+      </div>
+      <div class="panel">
+        <h2>By threat type</h2>
+        <div id="chart-category" class="bars"></div>
+      </div>
+      <div class="panel">
+        <h2>Score distribution</h2>
+        <div id="chart-score" class="bars"></div>
+      </div>
+    </section>
+
+    <section class="panel" id="ranked">
+      <h2>Ranked threats <span class="dim">— click a row for details</span></h2>
+      <div id="threat-list"></div>
+    </section>
+  </main>
+
+  <script src="critical.js"></script>
+</body>
+</html>
