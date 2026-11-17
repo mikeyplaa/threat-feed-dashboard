@@ -95,7 +95,7 @@ docker compose up --build -d
 docker compose logs -f
 ```
 
-Open **http://localhost:8000**. Columns appear within a few seconds as feeds
+Open **http://localhost:8070**. Columns appear within a few seconds as feeds
 are fetched on startup.
 
 ```bash
@@ -308,7 +308,7 @@ you expose it further, put it behind a reverse proxy with authentication
 ```bash
 # Run without Docker (from backend/)
 pip install -r requirements.txt
-uvicorn app:app --reload --port 8000
+uvicorn app:app --reload --port 8070
 
 # Syntax check all Python modules
 python -m py_compile backend/app.py backend/feeds.py backend/db.py
