@@ -19,7 +19,7 @@ but written cleanly enough to grow into one.
 - **Frontend**: vanilla HTML/CSS/JS, no build step, no framework. Served
   directly by FastAPI's `StaticFiles` mount. Polls `/api/feeds` every 60s.
 - **Deployment**: single Docker container via `docker-compose.yml`.
-  `docker compose up --build -d`, exposed on `:8000`.
+  `docker compose up --build -d`, exposed on `:8070`.
 
 ## Architecture
 
@@ -96,7 +96,7 @@ happens before building the list, but a failed refresh always overwrites
 ```bash
 # run locally without Docker (from backend/)
 pip install -r requirements.txt
-uvicorn app:app --reload --port 8000
+uvicorn app:app --reload --port 8070
 
 # run via Docker (from repo root)
 docker compose up --build -d   # --build required any time backend/ files change
