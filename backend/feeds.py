@@ -33,6 +33,7 @@ import httpx
 import logging
 import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
+from urllib.parse import urlsplit
 from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger("feeds")
@@ -459,11 +460,12 @@ async def fetch_crowdsec(client: httpx.AsyncClient, limit: int = 5):
 
 # ---------------------------------------------------------------------------
 # UK NCSC — news + threat reports via RSS (no auth)
-# Two official feeds merged into one column, newest first. The threat-report
-# feed has been reported by RSS aggregators as having gone quiet, so each feed
-# is fetched independently: one failing is logged and skipped, and the column
-# only errors if BOTH fail. Items carry no severity, so the risk score is
-# keyword-based: titles that read like an active threat get boosted.
+# Two official feeds merged into one column, newest first (confirmed live
+# Nov 2026 — both return current items; an earlier note here claiming the
+# threat-report feed had "gone quiet" didn't hold up and has been removed).
+# Each feed is fetched independently: one failing is logged and skipped, and
+# the column only errors if BOTH fail. Items carry no severity, so the risk
+# score is keyword-based: titles that read like an active threat get boosted.
 # ---------------------------------------------------------------------------
 # Order matters: an item in both feeds keeps the label of the first one.
 NCSC_FEEDS = {
@@ -502,21 +504,28 @@ async def fetch_ncsc(client: httpx.AsyncClient, limit: int = 25):
         if isinstance(res, Exception):
             continue
         kind, root = res
-        for item in root.findall(".//item"):
+        for item in root.findall(".//item")[:limit]:
             link = (item.findtext("link") or "").strip()
             title = (item.findtext("title") or "").strip()
-            key = link or title
-            if not key or key in seen:
+            # Drop query string/fragment so the same story syndicated with
+            # different tracking params in each feed still dedupes to one key.
+            dedup_key = urlsplit(link)._replace(query="", fragment="").geturl() if link else title
+            if not dedup_key or dedup_key in seen:
                 continue
-            seen.add(key)
+            seen.add(dedup_key)
             pub_date = item.findtext("pubDate")
             try:
-                ts = parsedate_to_datetime(pub_date).astimezone(timezone.utc).isoformat() if pub_date else None
+                # Match fetch_sans_isc: keep the parsed offset as-is rather than
+                # .astimezone(utc), which would silently apply the *host's*
+                # local timezone to a naive datetime (RFC 2822 allows a bare
+                # "-0000" for "no timezone info", which parsedate_to_datetime
+                # returns naive) instead of raising or treating it as UTC.
+                ts = parsedate_to_datetime(pub_date).isoformat() if pub_date else None
             except Exception:
                 ts = None
             description = re.sub(r"<[^>]+>", "", item.findtext("description") or "").strip()
             out.append({
-                "id": key,
+                "id": dedup_key,
                 "title": title,
                 "detail": description[:300] or f"NCSC {kind}",
                 "severity": kind,
