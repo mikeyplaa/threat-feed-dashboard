@@ -127,6 +127,13 @@ hit live APIs in tests).
   roughly). If NVD starts 403ing, either back off `REFRESH_INTERVAL_MINUTES`
   in `app.py` or add an NVD API key (free) as a request header in
   `fetch_nvd_recent`.
+- **UK NCSC (`fetch_ncsc`) merges two RSS feeds** (news + threat reports).
+  RSS aggregators reported the threat-report feed going quiet, so each feed is
+  fetched independently and one failing is only logged; the column errors only
+  if both fail. NCSC items have no severity, so `risk` is keyword-based (base
+  40, 70 when the title matches `_NCSC_URGENT`). Not yet verified against the
+  live feeds (dev container couldn't reach ncsc.gov.uk) — check item structure
+  on first real run.
 - **abuse.ch API methods**: ThreatFox is POST-based (intentional). URLhaus
   switched from POST to GET (confirmed Aug 2026 — `"http_get_expected"` error).
   Don't revert URLhaus back to POST.

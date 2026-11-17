@@ -33,6 +33,7 @@ import httpx
 import logging
 import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
+from urllib.parse import urlsplit
 from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger("feeds")
@@ -458,6 +459,85 @@ async def fetch_crowdsec(client: httpx.AsyncClient, limit: int = 5):
 
 
 # ---------------------------------------------------------------------------
+# UK NCSC — news + threat reports via RSS (no auth)
+# Two official feeds merged into one column, newest first (confirmed live
+# Nov 2026 — both return current items; an earlier note here claiming the
+# threat-report feed had "gone quiet" didn't hold up and has been removed).
+# Each feed is fetched independently: one failing is logged and skipped, and
+# the column only errors if BOTH fail. Items carry no severity, so the risk
+# score is keyword-based: titles that read like an active threat get boosted.
+# ---------------------------------------------------------------------------
+# Order matters: an item in both feeds keeps the label of the first one.
+NCSC_FEEDS = {
+    "threat report": "https://www.ncsc.gov.uk/api/1/services/v1/report-rss-feed.xml",
+    "news": "https://www.ncsc.gov.uk/api/1/services/v1/news-rss-feed.xml",
+}
+_NCSC_URGENT = re.compile(
+    r"\b(vulnerab\w*|exploit\w*|ransomware|alert|advisory|zero[- ]day|"
+    r"critical|patch\w*|compromise\w*|breach\w*|malware|attack\w*)\b",
+    re.I,
+)
+
+
+def _ncsc_risk(kind: str, title: str) -> dict:
+    hits = list(dict.fromkeys(m.lower() for m in _NCSC_URGENT.findall(title or "")))
+    if hits:
+        return _risk(70, "advisory", f"UK NCSC {kind} mentioning {', '.join(hits)}")
+    return _risk(40, "advisory", f"UK NCSC {kind}")
+
+
+async def fetch_ncsc(client: httpx.AsyncClient, limit: int = 25):
+    async def _one(kind: str, url: str):
+        r = await client.get(url, headers=HEADERS, timeout=TIMEOUT, follow_redirects=True)
+        r.raise_for_status()
+        return kind, ET.fromstring(r.content)
+
+    results = await asyncio.gather(*(_one(k, u) for k, u in NCSC_FEEDS.items()), return_exceptions=True)
+    errors = [f"{kind}: {res}" for kind, res in zip(NCSC_FEEDS, results) if isinstance(res, Exception)]
+    if len(errors) == len(NCSC_FEEDS):
+        raise RuntimeError("all NCSC feeds failed — " + "; ".join(errors))
+    for e in errors:
+        logger.warning(f"NCSC partial failure, continuing with other feed: {e}")
+
+    seen, out = set(), []
+    for res in results:
+        if isinstance(res, Exception):
+            continue
+        kind, root = res
+        for item in root.findall(".//item")[:limit]:
+            link = (item.findtext("link") or "").strip()
+            title = (item.findtext("title") or "").strip()
+            # Drop query string/fragment so the same story syndicated with
+            # different tracking params in each feed still dedupes to one key.
+            dedup_key = urlsplit(link)._replace(query="", fragment="").geturl() if link else title
+            if not dedup_key or dedup_key in seen:
+                continue
+            seen.add(dedup_key)
+            pub_date = item.findtext("pubDate")
+            try:
+                # Match fetch_sans_isc: keep the parsed offset as-is rather than
+                # .astimezone(utc), which would silently apply the *host's*
+                # local timezone to a naive datetime (RFC 2822 allows a bare
+                # "-0000" for "no timezone info", which parsedate_to_datetime
+                # returns naive) instead of raising or treating it as UTC.
+                ts = parsedate_to_datetime(pub_date).isoformat() if pub_date else None
+            except Exception:
+                ts = None
+            description = re.sub(r"<[^>]+>", "", item.findtext("description") or "").strip()
+            out.append({
+                "id": dedup_key,
+                "title": title,
+                "detail": description[:300] or f"NCSC {kind}",
+                "severity": kind,
+                "source_url": link or None,
+                "timestamp": ts,
+                "risk": _ncsc_risk(kind, title),
+            })
+    out.sort(key=lambda i: i["timestamp"] or "", reverse=True)
+    return out[:limit]
+
+
+# ---------------------------------------------------------------------------
 # Hacker News — recent security stories via Algolia search API (no auth)
 # ---------------------------------------------------------------------------
 async def fetch_hackernews(client: httpx.AsyncClient, limit: int = 20):
@@ -618,6 +698,7 @@ FEEDS = {
     "cisa_kev":    ("CISA Known Exploited Vulnerabilities", fetch_cisa_kev),
     "nvd_recent":  ("NVD — Critical CVEs (Last 7 Days)",     fetch_nvd_recent),
     "sans_isc":    ("SANS ISC — Threat Diaries",            fetch_sans_isc),
+    "ncsc":        ("UK NCSC — News & Threat Reports",      fetch_ncsc),
     "openphish":   ("OpenPhish — Active Phishing URLs",     fetch_openphish),
     "blocklist":   ("Blocklist.de — SSH Attackers",         fetch_blocklist_de),
     "threatfox":   ("ThreatFox — Recent Malware IOCs",      fetch_threatfox_recent),
