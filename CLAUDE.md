@@ -154,11 +154,12 @@ hit live APIs in tests).
   self-throttles independently of the scheduler: a module-level cache
   (`_crowdsec_cache` / `_CROWDSEC_COOLDOWN_MINUTES` in `feeds.py`) only hits
   the real API once per 3 hours and returns the last cached batch the rest of
-  the time, at `limit=5` IPs — roughly 40 requests/day. That cache lives in
-  process memory, so a container restart resets it and the next refresh will
-  hit the API immediately regardless of cooldown. A 429 still raises so
-  quota exhaustion (e.g. from manual testing against the same key) surfaces
-  as an error card instead of silently rendering empty.
+  the time, at `limit=5` IPs — roughly 40 requests/day. The cooldown state is
+  persisted to `crowdsec_state.json` next to `DB_PATH` (the `/data` volume),
+  so container restarts don't burn fresh quota. A 429 also starts the
+  cooldown (retry once per 3h, not every cycle); if a previous batch is
+  cached it's served with a log warning, otherwise the column shows a
+  "quota exhausted — next retry after HH:MM UTC" error.
 - **DShield's per-IP lookup (`/api/ip/{ip}`) is too fragile to fan out** —
   confirmed Oct 2026: one extra call right after a `/api/topips` request
   tripped a shared "Too Many Requests... bots cranky" 300s cooldown, which

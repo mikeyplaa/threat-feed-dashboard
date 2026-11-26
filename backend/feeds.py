@@ -28,6 +28,7 @@ surfaces as an error card in the dashboard — nothing else breaks.
 
 import os
 import re
+import json
 import asyncio
 import httpx
 import logging
@@ -376,9 +377,49 @@ async def fetch_otx(client: httpx.AsyncClient, limit: int = 20):
 # once per _CROWDSEC_COOLDOWN_MINUTES and returns the last cached batch the
 # rest of the time, so the column still "refreshes" every cycle without
 # spending quota. 5 IPs every 3h is ~40 requests/day, leaving headroom.
+#
+# The cooldown state is persisted next to the SQLite DB (the /data volume) so
+# container restarts don't each burn a fresh batch of quota. Any attempt —
+# success or 429 — starts the cooldown, so an exhausted quota is retried once
+# per cooldown window rather than every scheduler cycle.
 # ---------------------------------------------------------------------------
-_crowdsec_cache: dict = {"items": [], "fetched_at": None}
+_crowdsec_cache: dict = {"items": [], "fetched_at": None, "loaded": False}
 _CROWDSEC_COOLDOWN_MINUTES = 180
+_CROWDSEC_STATE_PATH = os.path.join(
+    os.path.dirname(os.environ.get("DB_PATH", "./feeds.db")) or ".",
+    "crowdsec_state.json",
+)
+
+
+class _CrowdSecQuotaError(Exception):
+    """Raised by a smoke lookup on HTTP 429 (daily quota exhausted)."""
+
+
+def _crowdsec_load_state() -> None:
+    """Best-effort restore of the cooldown cache from disk (once per process)."""
+    _crowdsec_cache["loaded"] = True
+    try:
+        with open(_CROWDSEC_STATE_PATH, encoding="utf-8") as f:
+            state = json.load(f)
+        _crowdsec_cache["items"] = state.get("items") or []
+        if state.get("fetched_at"):
+            _crowdsec_cache["fetched_at"] = datetime.fromisoformat(state["fetched_at"])
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError, TypeError) as e:
+        logger.warning(f"CrowdSec state file unreadable, ignoring: {e}")
+
+
+def _crowdsec_save_state() -> None:
+    fetched_at = _crowdsec_cache["fetched_at"]
+    try:
+        with open(_CROWDSEC_STATE_PATH, "w", encoding="utf-8") as f:
+            json.dump({
+                "items": _crowdsec_cache["items"],
+                "fetched_at": fetched_at.isoformat() if fetched_at else None,
+            }, f)
+    except OSError as e:
+        logger.warning(f"Could not persist CrowdSec state: {e}")
 
 
 async def fetch_crowdsec(client: httpx.AsyncClient, limit: int = 5):
@@ -386,10 +427,17 @@ async def fetch_crowdsec(client: httpx.AsyncClient, limit: int = 5):
     if not api_key:
         raise RuntimeError("CROWDSEC_API_KEY not set — free community key at https://app.crowdsec.net/")
 
+    if not _crowdsec_cache["loaded"]:
+        _crowdsec_load_state()
+
     now = datetime.now(timezone.utc)
     last = _crowdsec_cache["fetched_at"]
     if last and (now - last) < timedelta(minutes=_CROWDSEC_COOLDOWN_MINUTES):
-        return _crowdsec_cache["items"]
+        if _crowdsec_cache["items"]:
+            return _crowdsec_cache["items"]
+        # Last attempt hit the quota and we have nothing cached to show.
+        retry_at = (last + timedelta(minutes=_CROWDSEC_COOLDOWN_MINUTES)).strftime("%H:%M UTC")
+        raise RuntimeError(f"CrowdSec CTI daily quota exhausted — next retry after {retry_at}")
 
     # Pull a fresh batch of SSH attacker IPs from Blocklist.de
     r = await client.get("https://lists.blocklist.de/lists/ssh.txt", headers=HEADERS, timeout=TIMEOUT)
@@ -409,10 +457,20 @@ async def fetch_crowdsec(client: httpx.AsyncClient, limit: int = 5):
             timeout=TIMEOUT,
         )
         if resp.status_code == 429:
-            raise RuntimeError("CrowdSec CTI quota exceeded (429) — lower `limit` in fetch_crowdsec or back off REFRESH_INTERVAL_MINUTES")
+            raise _CrowdSecQuotaError()
         return resp.json() if resp.status_code == 200 else None
 
-    results = await asyncio.gather(*(_smoke(ip) for ip in ips))
+    try:
+        results = await asyncio.gather(*(_smoke(ip) for ip in ips))
+    except _CrowdSecQuotaError:
+        # Start the cooldown so we don't re-hit an exhausted quota every cycle.
+        _crowdsec_cache["fetched_at"] = now
+        _crowdsec_save_state()
+        if _crowdsec_cache["items"]:
+            logger.warning("CrowdSec CTI quota exceeded (429) — serving last cached batch")
+            return _crowdsec_cache["items"]
+        retry_at = (now + timedelta(minutes=_CROWDSEC_COOLDOWN_MINUTES)).strftime("%H:%M UTC")
+        raise RuntimeError(f"CrowdSec CTI daily quota exhausted (429) — next retry after {retry_at}")
 
     _rep_order = {"malicious": 0, "suspicious": 1, "known": 2, "benign": 3}
     out = []
@@ -455,6 +513,7 @@ async def fetch_crowdsec(client: httpx.AsyncClient, limit: int = 5):
     out.sort(key=lambda x: _rep_order.get(x["severity"], 9))
     _crowdsec_cache["items"] = out
     _crowdsec_cache["fetched_at"] = now
+    _crowdsec_save_state()
     return out
 
 
