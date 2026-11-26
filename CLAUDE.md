@@ -134,6 +134,12 @@ hit live APIs in tests).
   40, 70 when the title matches `_NCSC_URGENT`). Not yet verified against the
   live feeds (dev container couldn't reach ncsc.gov.uk) — check item structure
   on first real run.
+- **BleepingComputer (`fetch_bleepingcomputer`)** reads the public RSS feed
+  (`/feed/`, no key). News items, so risk is low (20, or 45 when the headline
+  matches `_BC_URGENT`); a CVE ID in the title is used as the `indicator` so
+  the story corroborates KEV/NVD items. Not yet verified against the live
+  feed (dev container couldn't reach bleepingcomputer.com) — if it 403s, the
+  site's Cloudflare front may be rejecting the bot User-Agent.
 - **abuse.ch API methods**: ThreatFox is POST-based (intentional). URLhaus
   switched from POST to GET (confirmed Aug 2026 — `"http_get_expected"` error).
   Don't revert URLhaus back to POST.

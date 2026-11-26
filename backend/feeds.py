@@ -570,6 +570,58 @@ async def fetch_hackernews(client: httpx.AsyncClient, limit: int = 20):
 
 
 # ---------------------------------------------------------------------------
+# BleepingComputer — security news via RSS (no auth)
+# Plain news, so risk stays low like Hacker News, with a modest keyword bump
+# for headlines about active threats. A CVE ID in the title becomes the
+# indicator so the story corroborates matching KEV/NVD items on /api/critical.
+# Not yet verified against the live feed (dev container couldn't reach
+# bleepingcomputer.com) — check item structure on first real run.
+# ---------------------------------------------------------------------------
+_BC_URGENT = re.compile(
+    r"\b(zero[- ]day|0-day|actively exploited|exploit\w*|ransomware|"
+    r"breach\w*|backdoor\w*|malware|emergency|critical)\b",
+    re.I,
+)
+_CVE_RE = re.compile(r"\bCVE-\d{4}-\d{4,7}\b", re.I)
+
+
+async def fetch_bleepingcomputer(client: httpx.AsyncClient, limit: int = 20):
+    url = "https://www.bleepingcomputer.com/feed/"
+    r = await client.get(url, headers=HEADERS, timeout=TIMEOUT, follow_redirects=True)
+    r.raise_for_status()
+    root = ET.fromstring(r.content)
+    out = []
+    for item in root.findall(".//item")[:limit]:
+        title = (item.findtext("title") or "").strip()
+        link = (item.findtext("link") or "").strip()
+        pub_date = item.findtext("pubDate")
+        try:
+            ts = parsedate_to_datetime(pub_date).isoformat() if pub_date else None
+        except Exception:
+            ts = None
+        categories = [c.text.strip() for c in item.findall("category") if c.text]
+        description = re.sub(r"<[^>]+>", "", item.findtext("description") or "").strip()
+        hits = list(dict.fromkeys(m.lower() for m in _BC_URGENT.findall(title)))
+        cve = _CVE_RE.search(title)
+        if hits:
+            risk = _risk(45, "news", f"BleepingComputer story mentioning {', '.join(hits)}",
+                         cve.group(0).upper() if cve else None)
+        else:
+            risk = _risk(20, "news", "Security news story (BleepingComputer)",
+                         cve.group(0).upper() if cve else None)
+        out.append({
+            "id": (item.findtext("guid") or link or title).strip(),
+            "title": title,
+            "detail": description[:300] or " · ".join(categories),
+            "severity": categories[0] if categories else None,
+            "source_url": link or None,
+            "timestamp": ts,
+            "risk": risk,
+        })
+    return out
+
+
+# ---------------------------------------------------------------------------
 # urlscan.io — recent publicly-submitted URL scans tagged malicious
 # Requires URLSCAN_API_KEY — unauthenticated search returns 403. The free
 # plan also can't search `verdicts.overall.malicious` (paid-plan-only field,
@@ -695,6 +747,7 @@ async def fetch_dshield_map(client: httpx.AsyncClient, limit: int = 20):
 # ---------------------------------------------------------------------------
 FEEDS = {
     "hackernews":  ("Hacker News — Security Stories",       fetch_hackernews),
+    "bleepingcomputer": ("BleepingComputer — Security News", fetch_bleepingcomputer),
     "cisa_kev":    ("CISA Known Exploited Vulnerabilities", fetch_cisa_kev),
     "nvd_recent":  ("NVD — Critical CVEs (Last 7 Days)",     fetch_nvd_recent),
     "sans_isc":    ("SANS ISC — Threat Diaries",            fetch_sans_isc),
