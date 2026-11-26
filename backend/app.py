@@ -245,5 +245,18 @@ async def emailrep_lookup(q: str):
     }
 
 
+class RevalidatingStaticFiles(StaticFiles):
+    """StaticFiles that makes browsers revalidate on every load.
+
+    `no-cache` still allows caching but forces an ETag check (cheap 304s), so
+    a rebuilt container's CSS/JS is picked up without a hard refresh.
+    """
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 # Serve the frontend
-app.mount("/", StaticFiles(directory="static", html=True), name="static")
+app.mount("/", RevalidatingStaticFiles(directory="static", html=True), name="static")
