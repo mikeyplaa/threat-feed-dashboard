@@ -89,8 +89,7 @@ main#board {
   padding: 12px 14px;
   border-bottom: 1px solid var(--panel-border);
   display: flex;
-  justify-content: space-between;
-  align-items: baseline;
+  flex-direction: column; /* title row on top, sparkline underneath */
 }
 
 .column-header h2 {
@@ -382,7 +381,9 @@ main#board {
 
 /* ---- sparkline ---- */
 .sparkline-wrap {
+  position: relative; /* Chart.js responsive sizing needs a relative, sized parent */
   height: 28px;
+  min-width: 0;
   margin-top: 6px;
 }
 
