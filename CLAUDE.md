@@ -113,6 +113,13 @@ hit live APIs in tests).
 
 ## Known constraints / gotchas
 
+- **iboss TLS inspection** re-signs container HTTPS with its own root CA
+  (confirmed Nov 2026: every feed failing `self-signed certificate in
+  certificate chain` only while the iboss client is on). Fix is trusting the
+  root via `backend/certs/*.crt` (gitignored, added in the Dockerfile with
+  `SSL_CERT_FILE`/`PIP_CERT`), never `verify=False`. iboss validates the real
+  upstream cert itself and returns 503 for bad ones, so trusting it doesn't
+  hide upstream cert failures from `raise_for_status()`.
 - **EmailRep requires a key, full stop** (confirmed Oct 2026 — unauthenticated
   requests return 429 `"the unauthenticated API is currently disabled.
   please use an API key"`, not a lower rate limit). Auth is a `Key` header,

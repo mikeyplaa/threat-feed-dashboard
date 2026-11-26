@@ -1,6 +1,9 @@
 data/
 *.db
 crowdsec_state.json
+# local/corporate root CAs for the container trust store — never commit
+backend/certs/*
+!backend/certs/.gitkeep
 __pycache__/
 *.pyc
 .env

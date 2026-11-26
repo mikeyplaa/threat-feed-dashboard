@@ -248,6 +248,21 @@ fetcher.
 
 ## Known constraints and gotchas
 
+**TLS-inspecting proxies (e.g. iboss)** — if every feed fails with
+`CERTIFICATE_VERIFY_FAILED: self-signed certificate in certificate chain`,
+outbound HTTPS is being re-signed by a proxy whose root CA the container
+doesn't trust. Export the proxy's root CA as a PEM `*.crt` into
+`backend/certs/` (gitignored) and rebuild — the Dockerfile adds it to the
+system bundle and points httpx (`SSL_CERT_FILE`) and pip (`PIP_CERT`) at it.
+Never work around this with `verify=False`. On Windows:
+
+```powershell
+# find the thumbprint: Get-ChildItem Cert:\LocalMachine\Root | ? Subject -match 'iboss'
+$c = Get-Item Cert:\LocalMachine\Root\<THUMBPRINT>
+"-----BEGIN CERTIFICATE-----`n$([Convert]::ToBase64String($c.RawData,'InsertLineBreaks'))`n-----END CERTIFICATE-----" |
+  Set-Content backend\certs\proxy-root.crt -Encoding ascii
+```
+
 **EmailRep requires a key, full stop** — confirmed Oct 2026: unauthenticated
 requests return 429 with `"the unauthenticated API is currently disabled.
 please use an API key"`, not just a lower rate limit. Auth is a `Key` header

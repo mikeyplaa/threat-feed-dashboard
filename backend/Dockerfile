@@ -2,6 +2,14 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# Optional extra root CAs, e.g. a corporate TLS-inspection proxy (iboss).
+# Drop PEM-encoded *.crt files into backend/certs/ (gitignored). They're added
+# to the system bundle alongside the normal Mozilla roots; verification stays on.
+COPY certs/ /usr/local/share/ca-certificates/extra/
+RUN update-ca-certificates
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    PIP_CERT=/etc/ssl/certs/ca-certificates.crt
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
