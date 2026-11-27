@@ -88,8 +88,12 @@ cd threat-feed-dashboard
 cp .env.example .env
 notepad .env   # or your editor of choice
 
-# Build and start
-docker compose up --build -d
+# Build and start (Windows/PowerShell): exports the iboss root CA if present,
+# then runs `docker compose up --build -d`. See "Known constraints".
+.\start.ps1
+
+# Or, on a device with no TLS-inspecting proxy:
+# docker compose up --build -d
 
 # Watch startup logs
 docker compose logs -f
@@ -254,14 +258,18 @@ outbound HTTPS is being re-signed by a proxy whose root CA the container
 doesn't trust. Export the proxy's root CA as a PEM `*.crt` into
 `backend/certs/` (gitignored) and rebuild — the Dockerfile adds it to the
 system bundle and points httpx (`SSL_CERT_FILE`) and pip (`PIP_CERT`) at it.
-Never work around this with `verify=False`. On Windows:
+Never work around this with `verify=False`. On Windows, the helper script
+exports every unexpired iboss root from the trusted root stores (public certs
+only) and cleans up stale ones from earlier runs:
 
 ```powershell
-# find the thumbprint: Get-ChildItem Cert:\LocalMachine\Root | ? Subject -match 'iboss'
-$c = Get-Item Cert:\LocalMachine\Root\<THUMBPRINT>
-"-----BEGIN CERTIFICATE-----`n$([Convert]::ToBase64String($c.RawData,'InsertLineBreaks'))`n-----END CERTIFICATE-----" |
-  Set-Content backend\certs\proxy-root.crt -Encoding ascii
+.\scripts\export-proxy-ca.ps1          # -WhatIf to preview; -SubjectPattern for a non-iboss proxy
+docker compose up --build -d
 ```
+
+`.\start.ps1` runs this automatically before every build, so rotated roots
+are picked up. On a device without iboss it exports nothing and exits
+cleanly. The build prints a `WARNING` if `backend/certs/` has no `*.crt`.
 
 **EmailRep requires a key, full stop** — confirmed Oct 2026: unauthenticated
 requests return 429 with `"the unauthenticated API is currently disabled.
