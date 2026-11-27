@@ -88,11 +88,12 @@ cd threat-feed-dashboard
 cp .env.example .env
 notepad .env   # or your editor of choice
 
-# Trust the iboss TLS-inspection root CA (PowerShell; see "Known constraints")
-.\scripts\export-proxy-ca.ps1
+# Build and start (Windows/PowerShell): exports the iboss root CA if present,
+# then runs `docker compose up --build -d`. See "Known constraints".
+.\start.ps1
 
-# Build and start
-docker compose up --build -d
+# Or, on a device with no TLS-inspecting proxy:
+# docker compose up --build -d
 
 # Watch startup logs
 docker compose logs -f
@@ -266,8 +267,9 @@ only) and cleans up stale ones from earlier runs:
 docker compose up --build -d
 ```
 
-Re-run it whenever iboss rotates its root. The build prints a `WARNING` if
-`backend/certs/` has no `*.crt`.
+`.\start.ps1` runs this automatically before every build, so rotated roots
+are picked up. On a device without iboss it exports nothing and exits
+cleanly. The build prints a `WARNING` if `backend/certs/` has no `*.crt`.
 
 **EmailRep requires a key, full stop** — confirmed Oct 2026: unauthenticated
 requests return 429 with `"the unauthenticated API is currently disabled.

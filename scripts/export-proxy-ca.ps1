@@ -9,7 +9,8 @@
     copies matching, unexpired root certificates (public certs only, never
     anything with a private key) from the Windows trusted root stores into
     backend/certs/auto-<thumbprint>.crt as PEM. Previously exported auto-*.crt
-    files that no longer match (rotated or expired roots) are removed.
+    files that no longer match (rotated or expired roots) are removed. On a
+    device without iboss it exports nothing and exits cleanly.
 
     backend/certs/* is gitignored: these files must never be committed.
 
@@ -33,18 +34,24 @@ $ErrorActionPreference = 'Stop'
 $certDir = Join-Path $PSScriptRoot '..\backend\certs' | Resolve-Path | Select-Object -ExpandProperty Path
 
 $now = Get-Date
-$roots = Get-ChildItem Cert:\LocalMachine\Root, Cert:\CurrentUser\Root |
-    Where-Object {
-        $_.Subject -match $SubjectPattern -and
-        -not $_.HasPrivateKey -and
-        $_.NotBefore -le $now -and
-        $_.NotAfter -gt $now
-    } |
-    Sort-Object Thumbprint -Unique
+$roots = @()
+if (Test-Path Cert:\) {
+    $roots = @(Get-ChildItem Cert:\LocalMachine\Root, Cert:\CurrentUser\Root |
+        Where-Object {
+            $_.Subject -match $SubjectPattern -and
+            -not $_.HasPrivateKey -and
+            $_.NotBefore -le $now -and
+            $_.NotAfter -gt $now
+        } |
+        Sort-Object Thumbprint -Unique)
+} else {
+    Write-Host "No Windows certificate store on this platform - skipping export."
+}
 
 if (-not $roots) {
-    throw "No unexpired root CA matching '$SubjectPattern' found in LocalMachine\Root or CurrentUser\Root. " +
-          "Is the iboss client installed? Check with: Get-ChildItem Cert:\LocalMachine\Root | ? Subject -match '$SubjectPattern'"
+    # Not an error: devices without iboss just use the standard Mozilla roots.
+    # Fall through so stale auto-*.crt from an earlier iboss install are still removed.
+    Write-Host "No unexpired root CA matching '$SubjectPattern' found - nothing to export (fine if this device isn't behind iboss)."
 }
 
 $keep = @()
