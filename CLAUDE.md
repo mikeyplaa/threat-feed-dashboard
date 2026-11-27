@@ -117,7 +117,9 @@ hit live APIs in tests).
   (confirmed Nov 2026: every feed failing `self-signed certificate in
   certificate chain` only while the iboss client is on). Fix is trusting the
   root via `backend/certs/*.crt` (gitignored, added in the Dockerfile with
-  `SSL_CERT_FILE`/`PIP_CERT`), never `verify=False`. iboss validates the real
+  `SSL_CERT_FILE`/`PIP_CERT`), never `verify=False`. Every target machine runs
+  iboss, so `scripts/export-proxy-ca.ps1` is a required setup step; the build
+  warns if `backend/certs/` is empty. iboss validates the real
   upstream cert itself and returns 503 for bad ones, so trusting it doesn't
   hide upstream cert failures from `raise_for_status()`.
 - **EmailRep requires a key, full stop** (confirmed Oct 2026 — unauthenticated

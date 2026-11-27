@@ -6,7 +6,9 @@ WORKDIR /app
 # Drop PEM-encoded *.crt files into backend/certs/ (gitignored). They're added
 # to the system bundle alongside the normal Mozilla roots; verification stays on.
 COPY certs/ /usr/local/share/ca-certificates/extra/
-RUN update-ca-certificates
+RUN update-ca-certificates \
+ && (ls /usr/local/share/ca-certificates/extra/*.crt >/dev/null 2>&1 \
+     || echo "WARNING: backend/certs/ has no *.crt - behind iboss, run scripts/export-proxy-ca.ps1 first or every feed will fail TLS verification")
 ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
     PIP_CERT=/etc/ssl/certs/ca-certificates.crt
 
